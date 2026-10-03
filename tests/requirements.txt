@@ -1,0 +1,6 @@
+python-docx
+openpyxl
+python-pptx
+pillow
+nbformat
+pyflakes

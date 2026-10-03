@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""
+new-shortcut - Windows-style "Create Shortcut" for GNOME Files.
+
+Interactive (what the right-click "New Shortcut..." item runs):
+    new-shortcut FOLDER
+
+Non-interactive:
+    new-shortcut FOLDER --target PATH [--name NAME]
+    new-shortcut FOLDER --url URL     [--name NAME]
+
+A shortcut to a file or folder is a symbolic link. A shortcut to a web
+address is a small .html file that opens the address in your browser, so
+it works when double-clicked in Files, on the desktop, or on any other OS.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Optional
+from urllib.parse import urlparse
+
+TITLE = "Create Shortcut"
+URL_SCHEMES = {"http", "https", "ftp", "mailto"}
+
+
+class Cancelled(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------
+# zenity dialogs
+# --------------------------------------------------------------------------
+
+def _zenity(args: List[str]) -> str:
+    try:
+        done = subprocess.run(["zenity", f"--title={TITLE}", *args],
+                              capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("new-shortcut: zenity is not installed (sudo apt install zenity)")
+    if done.returncode != 0:          # Cancel, Esc or window closed
+        raise Cancelled
+    return done.stdout.rstrip("\n")
+
+
+def _error(message: str) -> None:
+    try:
+        subprocess.run(["zenity", f"--title={TITLE}", "--error", "--no-wrap",
+                        f"--text={message}"], capture_output=True)
+    except FileNotFoundError:
+        pass
+    print(f"new-shortcut: {message}", file=sys.stderr)
+
+
+def ask_interactively(folder: Path) -> tuple:
+    kind = _zenity([
+        "--list", "--radiolist", "--hide-header",
+        "--width=380", "--height=250",
+        "--text=What do you want to create a shortcut to?",
+        "--column=", "--column=Target",
+        "TRUE", "A file", "FALSE", "A folder", "FALSE", "A web address (URL)",
+    ])
+    if kind == "A web address (URL)":
+        url = _zenity(["--entry", "--width=460",
+                       "--text=Type the web address:", "--entry-text=https://"])
+        target = normalise_url(url)
+        default = default_name_for_url(target)
+    else:
+        args = ["--file-selection", f"--filename={folder}/"]
+        if kind == "A folder":
+            args.append("--directory")
+        target = _zenity(args)
+        default = Path(target).name or target
+    name = _zenity(["--entry", "--width=460",
+                    "--text=Type a name for this shortcut:",
+                    f"--entry-text={default}"])
+    return kind, target, name or default
+
+
+# --------------------------------------------------------------------------
+# Creating shortcuts
+# --------------------------------------------------------------------------
+
+def normalise_url(text: str) -> str:
+    url = text.strip()
+    if not url or url == "https://":
+        raise ValueError("No web address was entered.")
+    if re.search(r"\s", url):
+        raise ValueError(f"A web address can't contain spaces:\n{url}")
+    explicit = "://" in url or url.lower().startswith("mailto:")
+    # "javascript:...", "file:..." etc. without "//" - but not "host:8080".
+    scheme_only = re.match(r"([A-Za-z][A-Za-z0-9+-]*):(?!\d)", url)
+    if not explicit and scheme_only:
+        raise ValueError(f"Unsupported address type: {scheme_only.group(1)}:")
+    if not explicit:
+        local = re.match(r"(localhost|127\.0\.0\.1)(:|/|$)", url)
+        url = ("http://" if local else "https://") + url   # e.g. Jupyter
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in URL_SCHEMES:
+        raise ValueError(f"Unsupported address type: {parsed.scheme}:")
+    if scheme == "mailto":
+        if "@" not in parsed.path:
+            raise ValueError(f"That doesn't look like an email address:\n{text}")
+        return url
+    host = parsed.hostname or ""
+    if not host or (host != "localhost" and "." not in host and ":" not in host):
+        raise ValueError(f"That doesn't look like a web address:\n{text}")
+    if re.search(r'[<>"{}|\\^`]', parsed.netloc):
+        raise ValueError(f"That doesn't look like a web address:\n{text}")
+    return url
+
+
+def default_name_for_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() == "mailto":
+        return parsed.path or "Email"
+    host = parsed.hostname or "Web link"
+    return host[4:] if host.startswith("www.") else host
+
+
+def clean_name(name: str) -> str:
+    name = name.replace("/", "-").replace("\0", "").strip()
+    return name.lstrip(".").strip()          # a leading dot would hide it
+
+
+def unique_path(folder: Path, name: str, split_ext: bool = True) -> Path:
+    """Windows-style collision handling: 'Name (2).ext'."""
+    candidate = folder / name
+    if not (candidate.exists() or candidate.is_symlink()):
+        return candidate
+    p = Path(name)
+    stem, ext = (p.stem, p.suffix) if split_ext and p.suffix else (name, "")
+    i = 2
+    while True:
+        candidate = folder / f"{stem} ({i}){ext}"
+        if not (candidate.exists() or candidate.is_symlink()):
+            return candidate
+        i += 1
+
+
+def make_link(folder: Path, target: Path, name: Optional[str]) -> Path:
+    target = target.expanduser()
+    if not target.is_absolute():
+        target = (folder / target)
+    target = Path(os.path.abspath(target))
+    if not target.exists():
+        raise ValueError(f"The item doesn't exist:\n{target}")
+    name = clean_name(name or target.name) or target.name
+    is_dir = target.is_dir()
+    # Keep the extension so the link opens with the right application.
+    if not is_dir and target.suffix and not name.lower().endswith(target.suffix.lower()):
+        name += target.suffix
+    link = unique_path(folder, name, split_ext=not is_dir)
+    os.symlink(target, link)
+    return link
+
+
+def make_url_shortcut(folder: Path, url: str, name: Optional[str]) -> Path:
+    url = normalise_url(url)
+    name = clean_name(name or default_name_for_url(url)) or default_name_for_url(url)
+    if name.lower().endswith(".html"):
+        name = name[:-5]
+    link = unique_path(folder, name + ".html")
+    href = html.escape(url, quote=True)
+    link.write_text(
+        "<!DOCTYPE html>\n"
+        '<html><head><meta charset="utf-8">\n'
+        f"<title>{html.escape(name)}</title>\n"
+        f'<meta http-equiv="refresh" content="0; url={href}">\n'
+        "</head><body>\n"
+        f'<p>Opening <a href="{href}">{html.escape(url)}</a>&hellip;</p>\n'
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    return link
+
+
+# --------------------------------------------------------------------------
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Create a Windows-style shortcut.")
+    parser.add_argument("folder", help="folder to create the shortcut in")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--target", help="file or folder the shortcut points to")
+    group.add_argument("--url", help="web address the shortcut opens")
+    parser.add_argument("--name", help="shortcut name (default: the target's name)")
+    args = parser.parse_args(argv)
+
+    folder = Path(args.folder).expanduser()
+    if not folder.is_dir():
+        _error(f"Not a folder: {folder}")
+        return 2
+
+    interactive = not (args.target or args.url)
+    try:
+        if interactive:
+            kind, target, name = ask_interactively(folder)
+            if kind == "A web address (URL)":
+                created = make_url_shortcut(folder, target, name)
+            else:
+                created = make_link(folder, Path(target), name)
+        elif args.url:
+            created = make_url_shortcut(folder, args.url, args.name)
+        else:
+            created = make_link(folder, Path(args.target), args.name)
+    except Cancelled:
+        return 1
+    except (ValueError, OSError) as exc:
+        if interactive:
+            _error(str(exc))
+        else:
+            print(f"new-shortcut: {exc}", file=sys.stderr)
+        return 2
+    print(created)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
