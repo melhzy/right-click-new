@@ -2,7 +2,7 @@
 # Right-Click New: the Windows "New" menu for Linux (GNOME Files + desktop).
 #
 #   ./install.sh                  templates + "New Shortcut…"
-#   ./install.sh --with-deps      also apt-install python3-nautilus and zenity
+#   ./install.sh --with-deps      also apt-install python3-nautilus, zenity, pinta
 #   ./install.sh --restart-files  restart Files afterwards (closes its windows)
 #   ./install.sh --no-shortcut    templates only
 #
@@ -37,18 +37,70 @@ pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
 }
 
+# Desktop-file ID of Pinta (apt, Flatpak or Snap), if it is installed.
+pinta_desktop_id() {
+  local dirs=(
+    "$DATA_HOME/applications" /usr/local/share/applications /usr/share/applications
+    "$DATA_HOME/flatpak/exports/share/applications"
+    /var/lib/flatpak/exports/share/applications /var/lib/snapd/desktop/applications
+  )
+  local id dir
+  for id in com.github.PintaProject.Pinta.desktop pinta.desktop pinta_pinta.desktop; do
+    for dir in "${dirs[@]}"; do
+      [[ -f "$dir/$id" ]] && { echo "$id"; return 0; }
+    done
+  done
+  return 1
+}
+
+# Make Pinta the app for .ora files (Pinta Image). The previous default is
+# remembered so uninstall.sh can restore it.
+set_ora_default() {
+  local id="$1" current=""
+  if command -v xdg-mime >/dev/null; then
+    current=$(xdg-mime query default image/openraster 2>/dev/null || true)
+  fi
+  if [[ "$current" == "$id" ]]; then
+    note "Pinta opens Pinta Image (.ora) files."
+    return
+  fi
+  if command -v xdg-mime >/dev/null; then
+    xdg-mime default "$id" image/openraster
+  elif command -v gio >/dev/null; then
+    gio mime image/openraster "$id" >/dev/null
+  else
+    note "Couldn't set Pinta as the app for .ora files (no xdg-mime or gio)."
+    return
+  fi
+  mkdir -p "$APP_DIR"
+  [[ -f "$APP_DIR/ora-default" ]] || printf '%s\n%s\n' "$id" "$current" > "$APP_DIR/ora-default"
+  note "Pinta now opens Pinta Image (.ora) files${current:+ (was $current)}."
+}
+
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 if ((with_deps)); then
-  say "Installing python3-nautilus and zenity (needs sudo)…"
-  sudo apt-get install -y python3-nautilus zenity
+  pkgs=(python3-nautilus zenity)
+  pinta_desktop_id >/dev/null || pkgs+=(pinta)
+  say "Installing ${pkgs[*]} (needs sudo)…"
+  sudo apt-get install -y "${pkgs[@]}"
 fi
 
-say "1/2  Templates for the \"New Document\" menu"
+say "1/3  Templates for the \"New Document\" menu"
 python3 "$HERE/build_templates.py" install ${tmpl_args[@]+"${tmpl_args[@]}"}
 
+say "2/3  Pinta for \"Pinta Image\""
+if pinta_id=$(pinta_desktop_id); then
+  set_ora_default "$pinta_id"
+else
+  note "Pinta isn't installed, so Pinta Image files have nothing to open them."
+  note "Install it with:  sudo apt install pinta   (or re-run ./install.sh --with-deps)"
+  note "or from Flathub:  flatpak install flathub com.github.PintaProject.Pinta"
+  note "then run ./install.sh again."
+fi
+
 if ((shortcut)); then
-  say "2/2  \"New Shortcut…\" menu item"
+  say "3/3  \"New Shortcut…\" menu item"
   install -Dm755 "$HERE/bin/new-shortcut" "$APP_DIR/new-shortcut"
   install -Dm644 "$HERE/nautilus/right_click_new.py" "$EXT_DIR/right_click_new.py"
   note "Installed the extension to $EXT_DIR"
@@ -79,7 +131,7 @@ if ((shortcut)); then
     note "load Python extensions (you'd see \"No module named 'gi'\")."
   fi
 else
-  say "2/2  Skipped \"New Shortcut…\" (--no-shortcut)"
+  say "3/3  Skipped \"New Shortcut…\" (--no-shortcut)"
 fi
 
 case "${XDG_CURRENT_DESKTOP:-}" in

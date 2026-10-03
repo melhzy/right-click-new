@@ -5,6 +5,7 @@ Needs: python-docx openpyxl python-pptx pillow nbformat
 Optional: LibreOffice (soffice) - if present, each Office file is also
 converted to PDF as an "does a real office suite open it" check.
 """
+import io
 import shutil
 import sqlite3
 import subprocess
@@ -13,6 +14,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from xml.dom import minidom
+from xml.etree import ElementTree
 
 import docx
 import nbformat
@@ -75,11 +77,32 @@ def main() -> int:
         p.save(tmp / "rt.pptx")
         return f"layouts={[l.name for l in p.slide_layouts]}, round-trips"
 
-    def t_png():
-        im = Image.open(out / "Bitmap image.png")
-        im.load()
-        assert im.getpixel((0, 0)) == (255, 255, 255)
-        return f"{im.size} {im.mode}"
+    def t_ora():
+        path = out / "Pinta Image.ora"
+        raw = path.read_bytes()
+        # The freedesktop MIME magic for image/openraster:
+        assert raw[30:38] == b"mimetype" and raw[38:54] == b"image/openraster"
+        with zipfile.ZipFile(path) as z:
+            first = z.infolist()[0]
+            assert first.filename == "mimetype" and first.compress_type == zipfile.ZIP_STORED
+            root = ElementTree.fromstring(z.read("stack.xml"))
+            w, h = int(root.get("w")), int(root.get("h"))
+            layers = root.findall("./stack/layer")
+            assert len(layers) == 1 and layers[0].get("name") == "Background"
+            layer = Image.open(io.BytesIO(z.read(layers[0].get("src"))))
+            merged = Image.open(io.BytesIO(z.read("mergedimage.png")))
+            thumb = Image.open(io.BytesIO(z.read("Thumbnails/thumbnail.png")))
+            assert layer.size == merged.size == (w, h)
+            assert layer.getpixel((0, 0)) == (255, 255, 255, 255)
+            assert max(thumb.size) <= 256
+        detail = f"{w}x{h}, 1 layer, thumbnail {thumb.size}"
+        try:
+            from pyora import Project
+        except ImportError:
+            return detail + " (pyora not installed)"
+        project = Project.load(str(path))
+        assert tuple(project.dimensions) == (w, h)
+        return detail + ", opens in pyora"
 
     def t_sqlite():
         path = out / "SQLite Database.sqlite3"
@@ -107,7 +130,7 @@ def main() -> int:
     check("docx (python-docx)", t_docx)
     check("xlsx (openpyxl)", t_xlsx)
     check("pptx (python-pptx)", t_pptx)
-    check("png (Pillow)", t_png)
+    check("Pinta Image (OpenRaster)", t_ora)
     check("sqlite3", t_sqlite)
     check("ipynb (nbformat)", t_ipynb)
     check("python script", t_python)

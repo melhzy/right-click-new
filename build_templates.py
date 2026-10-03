@@ -13,7 +13,7 @@ Standard library only (Python 3.8+), so it runs on a stock Ubuntu install.
 Usage
     python3 build_templates.py install   [--no-extras] [--group-extras]
                                          [--paper {letter,a4}]
-                                         [--bitmap-size WxH] [--force]
+                                         [--canvas-size WxH] [--force]
     python3 build_templates.py uninstall [--force]
     python3 build_templates.py list
     python3 build_templates.py build OUT_DIR   # write files only, no manifest
@@ -59,7 +59,7 @@ EXTRAS_FOLDER = "Code and Data"
 @dataclass(frozen=True)
 class Options:
     paper: str = "letter"                       # "letter" or "a4"
-    bitmap_size: Tuple[int, int] = (1920, 1080)
+    canvas_size: Tuple[int, int] = (1920, 1080)       # Pinta Image
 
 
 @dataclass(frozen=True)
@@ -530,22 +530,58 @@ def build_pptx(opts: Options) -> bytes:
 
 
 # --------------------------------------------------------------------------
-# Bitmap image (.png) and SQLite Database (.sqlite3)
+# Pinta Image (.ora) and SQLite Database (.sqlite3)
 # --------------------------------------------------------------------------
 
-def build_png(opts: Options) -> bytes:
-    """White RGB canvas, like a new image in Paint."""
-    width, height = opts.bitmap_size
-    raw = (b"\x00" + b"\xff" * (3 * width)) * height   # filter 0 + RGB row
+def _white_png(width: int, height: int) -> bytes:
+    """Opaque white RGBA PNG (the format Pinta uses for its layers)."""
+    raw = (b"\x00" + b"\xff" * (4 * width)) * height   # filter 0 + RGBA row
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         crc = zlib.crc32(tag + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     phys = struct.pack(">IIB", 3780, 3780, 1)               # 96 dpi
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"pHYs", phys)
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def build_ora(opts: Options) -> bytes:
+    """Blank canvas in OpenRaster, Pinta's own layered format.
+
+    Mirrors what Pinta writes: an uncompressed 'mimetype' entry first, one
+    "Background" layer, stack.xml (spec 0.0.5), mergedimage.png and a
+    thumbnail no larger than 256 px. Pinta registers itself for
+    image/openraster, so double-clicking the file opens it there.
+    """
+    width, height = opts.canvas_size
+    scale = min(1.0, 256 / max(width, height))
+    thumb = (max(1, round(width * scale)), max(1, round(height * scale)))
+    canvas = _white_png(width, height)
+    stack = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<image w="{width}" h="{height}" version="0.0.5">\n'
+        "  <stack>\n"
+        '    <layer name="Background" src="data/layer0.png" x="0" y="0" '
+        'opacity="1.00" composite-op="svg:src-over"/>\n'
+        "  </stack>\n"
+        "</image>\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        def add(name: str, data: bytes, method: int) -> None:
+            info = zipfile.ZipInfo(name, date_time=_ZIP_TIME)
+            info.compress_type = method
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, data)
+
+        add("mimetype", b"image/openraster", zipfile.ZIP_STORED)
+        add("data/layer0.png", canvas, zipfile.ZIP_STORED)
+        add("stack.xml", stack.encode("utf-8"), zipfile.ZIP_DEFLATED)
+        add("mergedimage.png", canvas, zipfile.ZIP_STORED)
+        add("Thumbnails/thumbnail.png", _white_png(*thumb), zipfile.ZIP_STORED)
+    return buf.getvalue()
 
 
 def build_sqlite(opts: Options) -> bytes:
@@ -642,8 +678,8 @@ TEMPLATES: List[Template] = [
              "Blank workbook with Sheet1"),
     Template("Microsoft PowerPoint Presentation.pptx", "windows", build_pptx,
              "16:9 deck with one title slide"),
-    Template("Bitmap image.png", "windows", build_png,
-             "White canvas (PNG; opens in any image editor)"),
+    Template("Pinta Image.ora", "windows", build_ora,
+             "Blank canvas in Pinta's own format; opens in Pinta (replaces Bitmap image)"),
     Template("SQLite Database.sqlite3", "windows", build_sqlite,
              "Empty SQLite database (stands in for Access)"),
     Template("Text Document.txt", "windows", _text(""),
@@ -801,7 +837,7 @@ def _report(status: str, rel: str, note: str = "") -> None:
 # --------------------------------------------------------------------------
 
 def cmd_install(args: argparse.Namespace) -> int:
-    opts = Options(paper=args.paper, bitmap_size=args.bitmap_size)
+    opts = Options(paper=args.paper, canvas_size=args.canvas_size)
     manifest = load_manifest()
 
     if args.dest:
@@ -949,7 +985,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    opts = Options(paper=args.paper, bitmap_size=args.bitmap_size)
+    opts = Options(paper=args.paper, canvas_size=args.canvas_size)
     out = Path(args.out_dir).expanduser()
     for rel, template in select_templates(not args.no_extras, args.group_extras).items():
         data = template.build(opts)
@@ -984,8 +1020,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                        help=f'put the extras in a "{EXTRAS_FOLDER}" submenu')
         p.add_argument("--paper", choices=sorted(PAPER_TWIPS), default="letter",
                        help="page size of the Word template (default: letter)")
-        p.add_argument("--bitmap-size", type=_size, default=(1920, 1080),
-                       metavar="WxH", help="canvas size of the bitmap (default: 1920x1080)")
+        p.add_argument("--canvas-size", "--bitmap-size", dest="canvas_size", type=_size,
+                       default=(1920, 1080), metavar="WxH",
+                       help="canvas size of the Pinta Image (default: 1920x1080)")
 
     p_install = sub.add_parser("install", help="add templates to your Templates folder")
     content_options(p_install)

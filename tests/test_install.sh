@@ -29,6 +29,18 @@ echo "== re-run is a no-op =="
 out=$(bt install)
 check "all unchanged" "grep -q 'Done: 13 unchanged' <<<\"\$out\""
 
+echo "== upgrade replaces the old Bitmap image.png template =="
+printf 'old png' > "$T/Bitmap image.png"
+python3 - "$HOME/.local/share/right-click-new/manifest.json" <<'EOF'
+import hashlib, json, sys
+path = sys.argv[1]
+m = json.load(open(path))
+m["files"]["Bitmap image.png"] = hashlib.sha256(b"old png").hexdigest()
+json.dump(m, open(path, "w"))
+EOF
+out=$(bt install)
+check "old bitmap template removed" "grep -q 'removed    Bitmap image.png' <<<\"\$out\" && [[ ! -e '$T/Bitmap image.png' && -f '$T/Pinta Image.ora' ]]"
+
 echo "== edited template is protected =="
 echo "my notes" > "$T/Text Document.txt"
 out=$(bt install)
@@ -72,5 +84,30 @@ check "extension removed" "[[ ! -e '$HOME/.local/share/nautilus-python/extension
 "$PKG/uninstall.sh" --force >/dev/null
 check "--force removes edited only" "[[ ! -e '$T/Python Script.py' && -f '$T/Text Document.txt' ]]"
 check "manifest gone" "[[ ! -e '$HOME/.local/share/right-click-new/manifest.json' ]]"
+
+echo "== Pinta becomes the .ora app, and uninstall gives it back =="
+export HOME="$S/home2"
+mkdir -p "$HOME/.local/share/applications" "$S/fakebin"
+touch "$HOME/.local/share/applications/com.github.PintaProject.Pinta.desktop"
+export FAKE_MIME_DB="$S/mimeapps"
+echo "image/openraster=org.gimp.GIMP.desktop" > "$FAKE_MIME_DB"
+cat > "$S/fakebin/xdg-mime" <<'EOF'
+#!/usr/bin/env bash
+# Stand-in for xdg-mime: "query default TYPE" and "default APP TYPE".
+if [[ "$1 $2" == "query default" ]]; then
+  grep -m1 "^$3=" "$FAKE_MIME_DB" | cut -d= -f2
+elif [[ "$1" == default ]]; then
+  { grep -v "^$3=" "$FAKE_MIME_DB"; echo "$3=$2"; } > "$FAKE_MIME_DB.new"
+  mv "$FAKE_MIME_DB.new" "$FAKE_MIME_DB"
+fi
+EOF
+chmod +x "$S/fakebin/xdg-mime"
+PATH="$S/fakebin:$PATH" "$PKG/install.sh" >/dev/null
+check "Pinta set as .ora default" "grep -qx 'image/openraster=com.github.PintaProject.Pinta.desktop' '$FAKE_MIME_DB'"
+PATH="$S/fakebin:$PATH" "$PKG/install.sh" >/dev/null
+check "re-install keeps the original previous app" "[[ \$(sed -n 2p '$HOME/.local/share/right-click-new/ora-default') == org.gimp.GIMP.desktop ]]"
+PATH="$S/fakebin:$PATH" "$PKG/uninstall.sh" >/dev/null
+check "uninstall restores previous .ora app" "grep -qx 'image/openraster=org.gimp.GIMP.desktop' '$FAKE_MIME_DB'"
+check "nothing left in the data folder" "[[ ! -e '$HOME/.local/share/right-click-new' ]]"
 
 exit $fail

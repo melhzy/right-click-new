@@ -1,7 +1,7 @@
 # Right-Click New
 
 **The Windows "New" menu for Linux.** Right-click in a folder or on the
-desktop and create a blank Word, Excel or PowerPoint file, an image, a text
+desktop and create a blank Word, Excel or PowerPoint file, a drawing, a text
 file, a notebook or a shortcut, the way you would on Windows.
 
 Built for Ubuntu's GNOME Files (Nautilus) and desktop. The templates also
@@ -11,10 +11,10 @@ work in Nemo, Caja, Thunar and Dolphin.
 Right-click in a Files window or on the desktop
 ├── New Folder                             built in
 ├── New Document ▸                         from your Templates folder
-│   ├── Bitmap image                       .png      white 1920×1080 canvas
 │   ├── Microsoft Excel Worksheet          .xlsx     Sheet1
 │   ├── Microsoft PowerPoint Presentation  .pptx     16:9, title slide + 4 layouts
 │   ├── Microsoft Word Document            .docx     Letter (or A4), Calibri 11
+│   ├── Pinta Image                        .ora      1920×1080 canvas, opens in Pinta
 │   ├── SQLite Database                    .sqlite3  stands in for Access
 │   ├── Text Document                      .txt
 │   └── extras: CSV File, Jupyter Notebook, Markdown Document, Python Script,
@@ -32,7 +32,7 @@ compatibility flag, so Word won't open them in Compatibility Mode.
 ```bash
 git clone https://github.com/melhzy/right-click-new.git
 cd right-click-new
-./install.sh --with-deps        # also apt-installs python3-nautilus + zenity
+./install.sh --with-deps        # also apt-installs python3-nautilus, zenity, pinta
 nautilus -q                     # reload Files so "New Shortcut…" appears
 ```
 
@@ -45,7 +45,7 @@ installed and you haven't edited).
 | `--no-extras` | Only the Windows items, no Python/R/data templates |
 | `--group-extras` | Put the extras in a **Code and Data ▸** submenu |
 | `--paper a4` | A4 Word template (default Letter) |
-| `--bitmap-size 1280x720` | Different canvas size |
+| `--canvas-size 1280x720` | Different Pinta Image canvas size |
 | `--no-shortcut` | Skip the **New Shortcut…** extension |
 | `--force` | Replace same-named files already in Templates (backed up first) |
 | `--restart-files` | Run `nautilus -q` for you |
@@ -76,6 +76,13 @@ files it created, and removes ones you deselect.
     your browser. It works from Files, the desktop, and other computers.
   You can also run it from a terminal:
   `~/.local/share/right-click-new/new-shortcut ~/Desktop --url scholar.google.com`
+* **Pinta Image.** Ubuntu has no Paint-style app, so the drawing template
+  is a blank canvas in OpenRaster (`.ora`), the layered format Pinta saves
+  natively, the way `.docx` belongs to a word processor. The installer makes
+  Pinta the app for `.ora` files (uninstall restores whatever had them
+  before); your PNG/JPEG photos, plots and screenshots keep opening in Image
+  Viewer. Double-click a Pinta Image to draw; **Ctrl+S** keeps it as `.ora`
+  (layers intact) and **File ▸ Save As** exports PNG or JPEG.
 
 ## Differences from Windows
 
@@ -86,6 +93,8 @@ files it created, and removes ones you deselect.
 * **New Shortcut…** appears in Files windows only. Ubuntu's desktop icons
   come from a separate GNOME Shell extension with its own menu, which
   doesn't load Files extensions (New Document ▸ does work there).
+* **Bitmap image** becomes **Pinta Image** (`.ora`), so a new drawing opens
+  straight in an editor instead of an image viewer.
 * Access, Project and Publisher have no direct Linux equivalents. Access is
   replaced by SQLite; Project and Publisher are left out.
 
@@ -97,6 +106,10 @@ or a venv is active. Files' built-in Python follows your `PATH`, picks up
 that environment's Python, and can't find the system `gi` module. Nothing
 is broken: open Files from the dock or Activities instead, or run
 `conda deactivate` before starting `nautilus` from the terminal.
+
+**A Pinta Image opens in something other than Pinta** (e.g. GIMP or an
+archive manager): run `./install.sh` again, or right-click the file ▸
+**Open With…** ▸ Pinta ▸ **Always use for this file type**.
 
 **New Shortcut… doesn't appear:** check that `python3-nautilus` and
 `zenity` are installed, run `nautilus -q`, then open Files from the dock.
