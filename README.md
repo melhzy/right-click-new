@@ -89,6 +89,20 @@ files it created, and removes ones you deselect.
 * Access, Project and Publisher have no direct Linux equivalents. Access is
   replaced by SQLite; Project and Publisher are left out.
 
+## Troubleshooting
+
+**`ImportError: ... No module named 'gi'` / `pygobject initialization failed`**
+when you run `nautilus` from a terminal: a conda environment (even `(base)`)
+or a venv is active. Files' built-in Python follows your `PATH`, picks up
+that environment's Python, and can't find the system `gi` module. Nothing
+is broken: open Files from the dock or Activities instead, or run
+`conda deactivate` before starting `nautilus` from the terminal.
+
+**New Shortcut… doesn't appear:** check that `python3-nautilus` and
+`zenity` are installed, run `nautilus -q`, then open Files from the dock.
+The item only shows on the background of a local folder you can write to
+(not in Trash, network locations or read-only folders).
+
 ## Adding your own
 
 Drop any file into `~/Templates` and it appears in the menu, e.g. a lab

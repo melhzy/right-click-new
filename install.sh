@@ -64,11 +64,19 @@ if ((shortcut)); then
     note "(or re-run ./install.sh --with-deps)"
   fi
 
+  # Files' embedded Python follows PATH. Inside an activated conda env or
+  # venv it picks up that Python, which has no system 'gi' module, so the
+  # extension can't load in a Files window started from this shell.
   if ((restart)); then
-    nautilus -q 2>/dev/null || true
-    note "Files restarted."
+    env PATH=/usr/local/bin:/usr/bin:/bin nautilus -q >/dev/null 2>&1 || true
+    note "Files closed. Open it again from the dock or Activities."
   else
-    note "Run 'nautilus -q' (closes open Files windows) or log out and in to load it."
+    note "Run 'nautilus -q' (closes open Files windows), then open Files from the dock."
+  fi
+  if [[ -n "${CONDA_PREFIX:-}${VIRTUAL_ENV:-}" ]]; then
+    note "A Python environment (conda/venv) is active in this terminal. Start Files"
+    note "from the dock, not from here: Files started from an activated shell can't"
+    note "load Python extensions (you'd see \"No module named 'gi'\")."
   fi
 else
   say "2/2  Skipped \"New Shortcut…\" (--no-shortcut)"
