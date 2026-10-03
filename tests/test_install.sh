@@ -2,7 +2,8 @@
 # End-to-end install/uninstall tests in a throwaway HOME.
 # Checks are eval'd strings, and '$HOME' in printf is written literally on
 # purpose (that's the user-dirs.dirs syntax), so silence those lints:
-# shellcheck disable=SC2016,SC2034,SC2329
+# (SC2317 is what older ShellCheck releases report instead of SC2329.)
+# shellcheck disable=SC2016,SC2034,SC2317,SC2329
 set -uo pipefail
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 S="$(mktemp -d)"
